@@ -43,7 +43,7 @@ GameBuilder v2 page
 ├── Live status message
 └── Responsive workbench
     ├── Left: Level setup (.ocs__card)
-    │   ├── Generate / Sync Code
+    │   ├── Clear / Pull / Push
     │   ├── Game name
     │   ├── Environment fieldset: background selection
     │   ├── Player fieldset: name, sprite, normalized X/Y position
@@ -71,13 +71,59 @@ manifests and focused `.mjs` modules are authored under
 `_projects/systems/gamebuilder/` and distributed by the registered project
 build.
 
+### Workspace persistence (implemented)
+
+The workspace now automatically keeps a browser-local recovery draft, including
+exact editor source, panel settings, unfinished barrier edits/cancel snapshots,
+object counters, engine selection, and builder visibility. Draft writes are
+debounced by 200 ms and flushed on page hide/navigation. Reload restores the
+draft without regenerating code. Save Workspace keeps a separate explicit
+return point; Load Saved Workspace restores it after confirmation.
+
+Workspace file actions now extend GAME_RUNNER's existing editor toolbar with
+compact, accessible icon controls. The existing Save icon saves the workspace;
+folder/download/upload/code icons provide load and exports/import. Clear
+restores the runner's construction-default code (empty for this workspace)
+without resetting the builder panels or deleting the explicit save. There is
+no separate page-level save toolbar or New Workspace button.
+
+Fresh startup no longer automatically generates the default background/Player
+into the runner. The panel keeps its starter selections, while the code stays
+empty until Push is explicitly clicked. Recovery continues to
+restore exact source, including an intentionally empty editor.
+
+Export/import workspace JSON and exact JavaScript export are implemented.
+Runner Save Code also saves this workspace through an awaited opt-in hook.
+Storage failures/conflicts are visible and stop automatic writes; invalid
+imports do not replace open work. These are single-level, one-return-point
+saves local to the browser/origin/page, not named game libraries or account
+backups. Export remains important: clearing browser data removes local saves,
+and a crash before a pending draft write can lose the latest edit.
+
+### Panel actions and safe Pull (implemented)
+
+Clear Builder, Pull left and Push right are compact outlined icons. Clear
+Builder resets panels only; runner Clear resets source only. Both confirm
+replacement and preserve the explicit workspace save.
+
+Pull uses the shared, checked-in Acorn browser asset at runtime (no npm build
+step), never executing source, to read supported literal data
+from one GameBuilder-style level: catalog background/sprites, Player, NPCs and
+splines. Source stays untouched. Generated IDs reconstruct character names;
+the original display capitalization is not recoverable. Unsupported shapes
+fail without replacing settings. Custom behavior can remain code-owned:
+Push is blocked unless the whole module is representable by the generator.
+
+Routine operation feedback appears briefly near the controls. Errors remain
+visible; automatic recovery writes do not repeatedly show notices. Existing
+runner controls use the same outlined SVG treatment on this page only.
+
 ### Still not implemented
 
-Importing object-literal code from GAME_RUNNER back into the builder, builder
-configuration save/load, code/config export controls, and direct writing of
-artifacts into the VS Code workspace remain future work. NPC and spline
-barrier editing/code generation are implemented; these are not pending Stage 2
-items.
+General legacy code import, multi-module game loading/saving, named
+workspace libraries, Gamify relocation, and direct writing into VS Code remain
+future work. NPC, spline barriers, and single-level workspace persistence are
+implemented.
 
 ## Current state and reuse opportunities
 
@@ -125,6 +171,25 @@ items.
   imports and local variables, which a code importer must handle conservatively.
 
 ## Target product boundaries and future workspace
+
+### Next priority: saved games and the Gamify reference game
+
+The next workspace priority is loading, editing, and saving complete games,
+followed by bringing Gamify and its levels into this registered system.
+See [GameBuilder and Gamify workspace roadmap](./GamifyWorkspaceRoadmap.md)
+for the source findings, proposed ownership, ordered milestones, and
+verification criteria. This is a plan, not an implemented migration.
+
+The first save milestone will use browser-local persistence plus portable
+JSON/source export. Existing Gamify behavior must be retained; unsupported
+objects, callbacks, and custom minigames remain code-owned until panel support
+can preserve them. Multi-module saves must retain actual level sources, not
+just a runner entry module that imports the published originals. Game-in-Game
+and the existing Player gravity flag follow the load/edit/save foundation.
+
+At the planning baseline, GAME_RUNNER restored editor text while GameBuilder
+reset its panel configuration on reload. The implemented workspace recovery
+now restores both. Startup does not regenerate over saved manual source.
 
 ### Navigation and product boundaries
 
@@ -303,7 +368,7 @@ must delegate to `BaseRunner.setValue()` so editor content and the code read by
 Do not silently replace manually edited code when a builder field changes:
 
 - Changes to builder settings mark generated code as out of date.
-- An explicit **Generate / Sync Code** action validates the configuration and
+- An explicit **Push** action validates the configuration and
   updates the GAME_RUNNER editor.
 - If the editor contains unsaved manual edits, confirm before replacing them.
 - Running the game always runs the current GAME_RUNNER editor contents. This
@@ -445,23 +510,54 @@ Keep source and distribution boundaries clear:
 
 ## Save, load, and export
 
-Use separate persistence for structured configuration and runner source code.
+Keep the workspace document separate from the runner's legacy source slot.
+The implemented workspace document contains matching configuration and exact
+source together; source-only runner saves outside GameBuilder remain unchanged.
 
-- **Save/Load Builder** serializes the versioned builder document. Initially,
-  use an explicit downloadable/uploadable JSON file and optionally a
-  browser-local draft keyed to this GameBuilder workspace.
+- **Save/Load Workspace** serializes the versioned workspace document. It keeps
+  a browser-local explicit save and automatic recovery draft, with JSON
+  export/import for portable copies.
 - **Runner code** remains managed by GAME_RUNNER and its normal runner storage
   key. Do not store JSON in the code editor's storage slot.
 - On load, validate `schemaVersion`, migrate known older schema versions, and
   report unsupported or invalid documents. Never silently drop unknown data.
 - **Export code** downloads the current runner source as a `.js` level module.
-  **Export configuration** downloads the structured JSON separately.
+  **Export Workspace JSON** downloads configuration, source, and authoring
+  state together.
 - Do not imply that browser-local saves synchronize between devices or users.
   Account/server persistence can be a later, separate decision.
 
-When a builder document is loaded, regenerate its source and offer to apply it
-to the runner editor. If the runner has existing saved/manual code, preserve it
-until the user accepts replacement.
+When a saved workspace is loaded, restore its exact editor source and matching
+panel configuration without regeneration. For a configuration-only import,
+offer generation explicitly. Preserve existing saved/manual code until the
+user accepts replacement.
+
+### Runner save-state notification (implemented)
+
+After successfully persisting editor source, the runner emits a
+bubbling `ocs:runner-saved` notification with a versioned payload identifying
+the runner, its storage key, the exact saved source, and a save revision.
+GameBuilder uses the controller's awaited workspace-save hook to associate that
+snapshot with matching panel configuration. The event remains available for
+other consumers; workspace persistence does not depend on event timing. Other
+runner pages keep their current Save Code behavior without a workspace
+subscriber.
+
+This event means **source saved**, not **complete workspace saved**, **code
+valid**, or **safe to regenerate**. GameBuilder must report its own persistence
+success or failure separately. When complete-workspace saving is wired into
+the runner's Save action, use an explicit awaited save hook rather than relying
+on asynchronous event listeners to delay success feedback.
+
+Track saved/dirty source separately from builder/code synchronization: saved
+manual edits may still differ from generated code. A save notification can
+offer later AST-based panel import, but must never automatically parse, execute,
+convert, or overwrite code. Storage failure must produce visible error feedback
+and no saved event. `getSaveState()` makes saved source queryable through the
+runner controller so a late subscriber can initialize correctly.
+
+See the [save-state contract in the workspace roadmap](./GamifyWorkspaceRoadmap.md#runner-save-state-contract)
+for the proposed payload and acceptance criteria.
 
 ## Implementation sequence
 
@@ -482,28 +578,31 @@ until the user accepts replacement.
 
 ### Stage 2 — complete builder behaviors
 
-1. Add wall/barrier controls to structured state and validate them before code
-   generation.
-2. Add AST-based import for the supported object-literal subset, with a
-   non-destructive preview and a canonical simple-game fixture.
-3. Add JSON save/load, migration/error feedback, and separate code/config
-   exports.
+1. Spline barriers and single-level workspace save/load/recovery are implemented,
+   retaining panel state and exact runner source together, with visible storage
+   errors and portable JSON/source exports.
+2. Add multi-level, multi-module loading and source editing before relocating
+   Gamify; run saved module edits rather than unchanged published imports.
+3. Move Gamify into the registered system with explicit metadata and
+   make-generated catalogs, preserving existing behavior and URLs. Then add
+   bounded AST-based panel import with a non-destructive preview.
 4. Add regression coverage for manifest resolution, generation from
    representative configurations, missing assets, schema validation, code
    import/round-trip preservation, and the runner integration hook.
 
 ### Stage 3 — advanced authoring
 
-1. Improve object placement and editing against the runner's documented
-   logical coordinate space.
-2. Add richer typed objects and per-spritesheet animation/direction settings.
+1. Add richer asset metadata and per-object animation/direction overrides,
+   followed by Game-in-Game authoring using the existing nested-game lifecycle.
+2. Expose existing Player gravity without confusing it with custom platformer
+   physics; expand typed objects and placement as compatibility requires.
 3. Consider server/account persistence only after the desired ownership,
    sharing, and collaboration behavior is specified.
 
 ## Decisions to confirm before implementation
 
-1. **Draft persistence:** should the first version save configuration only as
-   downloaded/uploaded JSON, or also keep a browser-local draft?
+1. **Draft persistence (confirmed):** browser-local complete-game saves plus
+   portable JSON/source exports are the first milestone.
 2. **Editor visibility:** should the GAME_RUNNER editor always be shown, or
    should Builder/Code modes be used to show the editor only when requested?
 3. **Runner layout:** should the runner editor and game output remain stacked
@@ -512,9 +611,8 @@ until the user accepts replacement.
 4. **Import scope:** which object-literal patterns in the simple game should
    be panel-editable in the first importer? The proposal recommends a safe
    static-literal subset with unsupported code preserved.
-5. **Local artifact workflow:** are download/upload and VS Code-managed source
-   files sufficient initially, or is a secured local workspace bridge a
-   required feature?
+5. **Local artifact workflow (confirmed):** download/upload and VS Code-managed
+   source files are sufficient initially; direct workspace writes are deferred.
 6. **Migration scope:** should v2 initially support the current background,
    player, NPC, and barriers feature set, or may some v1 controls be deferred?
 
